@@ -203,6 +203,10 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# Almacenes de claves locales
+*.myks
+.*.myks.*.tmp
+
 # Ruff stuff:
 .ruff_cache/
 
