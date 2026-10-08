@@ -148,11 +148,11 @@ def load_keystore_entry(path: Path, alias: str, password: str) -> KeyEntry:
         raise ValueError("El alias no puede estar vacio.")
 
     entries = load_keystore(path, password)
+
     try:
         return entries[normalized_alias]
     except KeyError as exc:
         raise ValueError(f"No existe el alias '{normalized_alias}' en el KeyStore.") from exc
-
 
 def save_keystore(path: Path, password: str, entries: dict[str, KeyEntry]) -> None:
     """Write a version-1 keystore: header, salt, nonce, then AES-GCM ciphertext."""
