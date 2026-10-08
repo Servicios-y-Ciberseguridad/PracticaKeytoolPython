@@ -42,13 +42,11 @@ class KeyEntry(TypedDict):
     public_key: str
     dn: dict[str, str]
 
-
 def ensure_crypto_available() -> None:
     if CRYPTO_IMPORT_ERROR is not None:
         raise ModuleNotFoundError(
             "No se pudo importar 'cryptography' con este interprete de Python."
         ) from CRYPTO_IMPORT_ERROR
-
 
 def handoff_to_project_venv(argv: Sequence[str] | None) -> int | None:
     if CRYPTO_IMPORT_ERROR is None:
@@ -60,35 +58,41 @@ def handoff_to_project_venv(argv: Sequence[str] | None) -> int | None:
     command = [str(venv_python), str(Path(__file__).resolve()), *(argv or sys.argv[1:])]
     return subprocess.run(command, check=False).returncode
 
-
 def derive_store_key(password: str, salt: bytes) -> bytes:
     ensure_crypto_available()
     return Scrypt(salt=salt, length=32, n=2**17, r=8, p=1).derive(
         password.encode("utf-8")
     )
 
-
 def load_keystore(path: Path, password: str) -> dict[str, KeyEntry]:
     ensure_crypto_available()
+
     try:
         data = path.read_bytes()
     except FileNotFoundError:
         return {}
     offset = len(STORE_HEADER)
+
     if not data.startswith(STORE_HEADER) or len(data) < offset + 16 + 12 + 16:
         raise ValueError("Formato de KeyStore no valido.")
+    
     salt = data[offset : offset + 16]
     nonce = data[offset + 16 : offset + 28]
+
     try:
         plaintext = AESGCM(derive_store_key(password, salt)).decrypt(
             nonce, data[offset + 28 :], STORE_HEADER
         )
     except InvalidTag as exc:
         raise ValueError("Contrasena incorrecta o KeyStore alterado.") from exc
+    
     entries = json.loads(plaintext)
+
     if not isinstance(entries, dict):
         raise ValueError("Contenido de KeyStore no valido.")
+    
     store: dict[str, KeyEntry] = {}
+
     for alias, entry in entries.items():
         if (
             not isinstance(alias, str)
@@ -99,30 +103,37 @@ def load_keystore(path: Path, password: str) -> dict[str, KeyEntry]:
             or not isinstance(entry.get("dn"), dict)
         ):
             raise ValueError("Entrada de KeyStore no valida.")
+        
         dn = entry["dn"]
+
         if set(dn) != set(DN_FIELDS) or any(
             not isinstance(value, str) or not value.strip() for value in dn.values()
         ):
             raise ValueError("DN de KeyStore no valido.")
+        
         store[alias] = KeyEntry(
             private_key=entry["private_key"], public_key=entry["public_key"], dn=dn
         )
-    return store
 
+    return store
 
 def save_keystore(path: Path, password: str, entries: dict[str, KeyEntry]) -> None:
     ensure_crypto_available()
+
     salt = os.urandom(16)
     nonce = os.urandom(12)
+
     plaintext = json.dumps(entries, ensure_ascii=True).encode("utf-8")
     ciphertext = AESGCM(derive_store_key(password, salt)).encrypt(
         nonce, plaintext, STORE_HEADER
     )
+
     # El temporal solo contiene datos cifrados y se reemplaza en el mismo volumen.
     with tempfile.NamedTemporaryFile(
         dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
     ) as temporary:
         temporary_path = Path(temporary.name)
+        
         try:
             temporary.write(STORE_HEADER + salt + nonce + ciphertext)
             temporary.flush()
@@ -136,20 +147,17 @@ def save_keystore(path: Path, password: str, entries: dict[str, KeyEntry]) -> No
     finally:
         temporary_path.unlink(missing_ok=True)
 
-
 def read_password(prompt: str) -> str:
     # getpass no debe recurrir a una entrada con eco si no hay terminal seguro.
     with warnings.catch_warnings():
         warnings.simplefilter("error", getpass.GetPassWarning)
         return getpass.getpass(prompt)
 
-
 def read_required(prompt: str) -> str:
     value = input(prompt).strip()
     if not value:
         raise ValueError("Los campos solicitados no pueden estar vacios.")
     return value
-
 
 def handle_genkeypair(path: Path = DEFAULT_KEYSTORE) -> int:
     """Genera un par RSA y guarda la entrada en un almacen cifrado."""
@@ -199,13 +207,11 @@ def handle_genkeypair(path: Path = DEFAULT_KEYSTORE) -> int:
     print(f"Exito: par RSA de 2048 bits guardado con alias '{alias}' en '{path}'.")
     return 0
 
-
 def handle_certreq() -> int:
     """Punto de entrada para la futura generacion de solicitudes CSR."""
     print("Comando --certreq seleccionado.")
     print("La generacion de solicitudes CSR se implementara en el siguiente modulo.")
     return 0
-
 
 def build_parser() -> argparse.ArgumentParser:
     """Construye y devuelve el analizador de argumentos de la aplicacion."""
@@ -242,7 +248,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     return parser
 
-
 def main(argv: Sequence[str] | None = None) -> int:
     """Procesa los argumentos y ejecuta el manejador del comando elegido."""
     handoff_result = handoff_to_project_venv(argv)
@@ -256,7 +261,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         "certreq": handle_certreq,
     }
     return handlers[args.command]()
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
