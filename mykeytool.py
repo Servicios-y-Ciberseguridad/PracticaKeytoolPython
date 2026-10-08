@@ -139,7 +139,8 @@ def load_keystore(path: Path, password: str) -> dict[str, KeyEntry]:
         )
 
     return store
-    return store
+
+
 def load_keystore_entry(path: Path, alias: str, password: str) -> KeyEntry:
     """Return one keystore entry after authenticating and decrypting the store."""
     normalized_alias = alias.strip()
@@ -151,6 +152,7 @@ def load_keystore_entry(path: Path, alias: str, password: str) -> KeyEntry:
         return entries[normalized_alias]
     except KeyError as exc:
         raise ValueError(f"No existe el alias '{normalized_alias}' en el KeyStore.") from exc
+
 
 def save_keystore(path: Path, password: str, entries: dict[str, KeyEntry]) -> None:
     """Write a version-1 keystore: header, salt, nonce, then AES-GCM ciphertext."""
@@ -250,7 +252,7 @@ def read_dname_interactively() -> dict[str, str]:
         "ST": "What is the name of your State or Province? [Unknown]: ",
         "C": "What is the two-letter country code for this unit? [Unknown]: ",
     }
-    
+
     while True:
         dn = {
             field: input(prompts[field]).strip() or UNKNOWN_DN_VALUE

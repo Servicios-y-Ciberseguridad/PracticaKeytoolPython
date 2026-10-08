@@ -113,7 +113,7 @@ La clave privada se guarda cifrada con `keypass`. Si `python` apunta a un interp
 El archivo binario tiene una versión identificada por su cabecera y esta distribución:
 
 ```text
-MYKEYSTORE\\x01 | sal aleatoria de 16 bytes | nonce de 12 bytes | ciphertext y etiqueta GCM
+MYKEYSTORE\x01 | sal aleatoria de 16 bytes | nonce de 12 bytes | ciphertext y etiqueta GCM
 ```
 
 El contenido cifrado es un objeto JSON UTF-8 con las entradas indexadas por alias. La clave de cifrado se deriva de la contraseña del almacén con Scrypt; AES-GCM cifra y autentica el contenido usando la cabecera como dato autenticado. El formato se versiona cambiando la cabecera si en el futuro cambia su estructura o sus parámetros.
