@@ -76,7 +76,13 @@ python mykeytool.py --genkeypair
 python mykeytool.py --certreq
 ```
 
-`--genkeypair` solicita por consola la contrasena del KeyStore, un alias unico y los campos del DN. Si `python` apunta a un interprete sin `cryptography`, el script intentara reejecutarse automaticamente con `.venv`. `--certreq` sigue siendo un marcador para la siguiente fase del proyecto.
+Tambien admite una sintaxis parecida a `keytool` para `genkeypair`:
+
+```bash
+python mykeytool.py -genkeypair -alias mykey -keyalg RSA -keysize 2048 -dname "CN=Ana, OU=TI, O=Empresa, L=Madrid, ST=Madrid, C=ES" -storepass test-password-123
+```
+
+`--genkeypair` y `-genkeypair` solicitan por consola la contrasena del KeyStore, un alias y los campos del DN si faltan argumentos. Si `python` apunta a un interprete sin `cryptography`, el script intentara reejecutarse automaticamente con `.venv`. `--certreq` sigue siendo un marcador para la siguiente fase del proyecto.
 
 Si quieres forzar manualmente el interprete del entorno virtual, usa:
 

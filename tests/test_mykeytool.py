@@ -27,7 +27,7 @@ class GenKeyPairTests(unittest.TestCase):
         errors = io.StringIO()
         with (
             patch("mykeytool.getpass.getpass", side_effect=passwords) as getpass_mock,
-            patch("builtins.input", side_effect=[alias, *fields]),
+            patch("builtins.input", side_effect=[alias, *fields, "yes"]),
             contextlib.redirect_stdout(output),
             contextlib.redirect_stderr(errors),
         ):
@@ -59,6 +59,93 @@ class GenKeyPairTests(unittest.TestCase):
             self.assertNotIn(secret, encrypted)
         with self.assertRaisesRegex(ValueError, "incorrecta"):
             mykeytool.load_keystore(self.path, "wrong-password")
+
+    def test_supports_keytool_style_arguments(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        argv = [
+            "-genkeypair",
+            "-keystore",
+            str(self.path),
+            "-alias",
+            "mykey",
+            "-storepass",
+            self.password,
+            "-keyalg",
+            "RSA",
+            "-keysize",
+            "3072",
+            "-dname",
+            "CN=Ana, OU=TI, O=Empresa, L=Madrid, ST=Madrid, C=es",
+        ]
+        with (
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(errors),
+        ):
+            result = mykeytool.main(argv)
+        self.assertEqual(result, 0, errors.getvalue())
+        self.assertIn("3072 bits", output.getvalue())
+        entry = mykeytool.load_keystore(self.path, self.password)["mykey"]
+        private = serialization.load_pem_private_key(
+            entry["private_key"].encode("ascii"), password=None
+        )
+        self.assertEqual(private.key_size, 3072)
+        self.assertEqual(entry["dn"]["C"], "ES")
+
+    def test_reprompts_until_distinguished_name_is_confirmed(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        answers = [
+            "miClave",
+            "Ana",
+            "TI",
+            "Empresa",
+            "Madrid",
+            "Madrid",
+            "es",
+            "no",
+            "Ana Dos",
+            "TI",
+            "Empresa",
+            "Madrid",
+            "Madrid",
+            "es",
+            "yes",
+        ]
+        with (
+            patch("mykeytool.getpass.getpass", side_effect=[self.password, self.password]),
+            patch("builtins.input", side_effect=answers),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(errors),
+        ):
+            result = mykeytool.main(["-genkeypair", "-keystore", str(self.path)])
+        self.assertEqual(result, 0, errors.getvalue())
+        entry = mykeytool.load_keystore(self.path, self.password)["miClave"]
+        self.assertEqual(entry["dn"]["CN"], "Ana Dos")
+
+    def test_rejects_unsupported_key_algorithm(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        with (
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(errors),
+        ):
+            result = mykeytool.main([
+                "-genkeypair",
+                "-keystore",
+                str(self.path),
+                "-alias",
+                "mykey",
+                "-storepass",
+                self.password,
+                "-keyalg",
+                "EC",
+                "-dname",
+                "CN=Ana, OU=TI, O=Empresa, L=Madrid, ST=Madrid, C=ES",
+            ])
+        self.assertEqual(result, 1)
+        self.assertIn("Solo se admite -keyalg RSA", errors.getvalue())
+        self.assertFalse(self.path.exists())
 
     def test_preserves_existing_entries(self):
         self.assertEqual(self.generate()[0], 0)

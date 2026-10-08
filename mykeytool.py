@@ -43,6 +43,15 @@ class KeyEntry(TypedDict):
     dn: dict[str, str]
 
 
+class GenKeyPairOptions(TypedDict, total=False):
+    alias: str
+    storepass: str
+    keypass: str
+    dname: str
+    keyalg: str
+    keysize: int
+
+
 def ensure_crypto_available() -> None:
     if CRYPTO_IMPORT_ERROR is not None:
         raise ModuleNotFoundError(
@@ -151,29 +160,113 @@ def read_required(prompt: str) -> str:
     return value
 
 
-def handle_genkeypair(path: Path = DEFAULT_KEYSTORE) -> int:
+def parse_dname(dname: str) -> dict[str, str]:
+    parts = [part.strip() for part in dname.split(",") if part.strip()]
+    values: dict[str, str] = {}
+    for part in parts:
+        key, separator, value = part.partition("=")
+        field = key.strip().upper()
+        normalized = value.strip()
+        if not separator or field not in DN_FIELDS or not normalized:
+            raise ValueError("-dname debe usar el formato CN=..., OU=..., O=..., L=..., ST=..., C=...")
+        if field in values:
+            raise ValueError(f"-dname repite el campo '{field}'.")
+        values[field] = normalized
+    if set(values) != set(DN_FIELDS):
+        raise ValueError("-dname debe incluir exactamente CN, OU, O, L, ST y C.")
+    return values
+
+
+def validate_country(dn: dict[str, str]) -> None:
+    country = dn["C"]
+    if len(country) != 2 or not country.isascii() or not country.isalpha():
+        raise ValueError("C debe ser un codigo de pais de dos letras (p. ej. ES).")
+    dn["C"] = country.upper()
+
+
+def read_dname_interactively() -> dict[str, str]:
+    prompts = {
+        "CN": "What is your first and last name? ",
+        "OU": "What is the name of your organizational unit? ",
+        "O": "What is the name of your organization? ",
+        "L": "What is the name of your City or Locality? ",
+        "ST": "What is the name of your State or Province? ",
+        "C": "What is the two-letter country code for this unit? ",
+    }
+    while True:
+        dn = {field: read_required(prompts[field]) for field in DN_FIELDS}
+        validate_country(dn)
+        rendered = ", ".join(f"{field}={dn[field]}" for field in DN_FIELDS)
+        confirmation = input(f"Is {rendered} correct? [no]: ").strip().lower()
+        if confirmation in {"y", "yes", "s", "si", "sí"}:
+            return dn
+
+
+def resolve_dname(dname: str | None) -> dict[str, str]:
+    if dname is not None:
+        parsed = parse_dname(dname)
+        validate_country(parsed)
+        return parsed
+    return read_dname_interactively()
+
+
+def read_store_password(path: Path, storepass: str | None) -> str:
+    if storepass is not None:
+        password = storepass
+    else:
+        password = read_password("Enter keystore password: ")
+    if not password:
+        raise ValueError("La contrasena no puede estar vacia.")
+    if not path.exists():
+        if len(password) < 8:
+            raise ValueError("La contrasena debe tener al menos 8 caracteres.")
+        if storepass is None and read_password("Re-enter new password: ") != password:
+            raise ValueError("Las contrasenas no coinciden.")
+    return password
+
+
+def resolve_alias(alias: str | None) -> str:
+    if alias is not None:
+        resolved = alias.strip()
+        if not resolved:
+            raise ValueError("Los campos solicitados no pueden estar vacios.")
+        return resolved
+    typed = input("Enter key alias [mykey]: ")
+    if typed == "":
+        return "mykey"
+    resolved = typed.strip()
+    if not resolved:
+        raise ValueError("Los campos solicitados no pueden estar vacios.")
+    return resolved
+
+
+def handle_genkeypair(
+    path: Path = DEFAULT_KEYSTORE,
+    *,
+    alias: str | None = None,
+    storepass: str | None = None,
+    keypass: str | None = None,
+    dname: str | None = None,
+    keyalg: str = "RSA",
+    keysize: int = 2048,
+) -> int:
     """Genera un par RSA y guarda la entrada en un almacen cifrado."""
     try:
         ensure_crypto_available()
-        password = read_password("Contrasena del KeyStore: ")
-        if not password:
-            raise ValueError("La contrasena no puede estar vacia.")
-        is_new = not path.exists()
-        if is_new:
-            if len(password) < 8:
-                raise ValueError("La contrasena debe tener al menos 8 caracteres.")
-            if read_password("Confirma la contrasena: ") != password:
-                raise ValueError("Las contrasenas no coinciden.")
+        algorithm = keyalg.upper()
+        if algorithm != "RSA":
+            raise ValueError("Solo se admite -keyalg RSA en esta implementacion.")
+        if keysize < 1024:
+            raise ValueError("-keysize debe ser un entero de al menos 1024 bits.")
+        if keypass is not None and not keypass:
+            raise ValueError("-keypass no puede estar vacio.")
+        password = read_store_password(path, storepass)
         entries = load_keystore(path, password)
-        alias = read_required("Alias unico: ")
+        alias = resolve_alias(alias)
         if alias in entries:
             raise ValueError(f"El alias '{alias}' ya existe.")
-        dn = {field: read_required(f"{field}: ") for field in DN_FIELDS}
-        country = dn["C"]
-        if len(country) != 2 or not country.isascii() or not country.isalpha():
-            raise ValueError("C debe ser un codigo de pais de dos letras (p. ej. ES).")
-        dn["C"] = country.upper()
-        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        dn = resolve_dname(dname)
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=keysize)
         entries[alias] = KeyEntry(
             private_key=private_key.private_bytes(
                 serialization.Encoding.PEM,
@@ -196,7 +289,7 @@ def handle_genkeypair(path: Path = DEFAULT_KEYSTORE) -> int:
     except (EOFError, KeyboardInterrupt):
         print("\nError: operacion cancelada; no se ha guardado la entrada.", file=sys.stderr)
         return 1
-    print(f"Exito: par RSA de 2048 bits guardado con alias '{alias}' en '{path}'.")
+    print(f"Exito: par {algorithm} de {keysize} bits guardado con alias '{alias}' en '{path}'.")
     return 0
 
 
@@ -220,6 +313,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands = parser.add_mutually_exclusive_group(required=True)
     commands.add_argument(
+        "-genkeypair",
         "--genkeypair",
         action="store_const",
         const="genkeypair",
@@ -227,6 +321,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="genera un par de claves RSA y lo guarda en el KeyStore",
     )
     commands.add_argument(
+        "-certreq",
         "--certreq",
         action="store_const",
         const="certreq",
@@ -234,11 +329,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="genera una solicitud de firma de certificado (CSR)",
     )
     parser.add_argument(
+        "-keystore",
         "--keystore",
         type=Path,
         default=DEFAULT_KEYSTORE,
         help="archivo del almacen propio cifrado (por defecto: keystore.myks)",
     )
+    parser.add_argument("-alias", help="alias de la entrada a generar")
+    parser.add_argument("-dname", help="DN en formato CN=..., OU=..., O=..., L=..., ST=..., C=...")
+    parser.add_argument("-storepass", help="contrasena del KeyStore")
+    parser.add_argument("-keypass", help="contrasena de la clave generada")
+    parser.add_argument("-keyalg", default="RSA", help="algoritmo de la clave (solo RSA)")
+    parser.add_argument("-keysize", type=int, default=2048, help="tamano de clave en bits")
 
     return parser
 
@@ -252,7 +354,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     handlers: dict[str, CommandHandler] = {
-        "genkeypair": lambda: handle_genkeypair(args.keystore),
+        "genkeypair": lambda: handle_genkeypair(
+            args.keystore,
+            alias=args.alias,
+            storepass=args.storepass,
+            keypass=args.keypass,
+            dname=args.dname,
+            keyalg=args.keyalg,
+            keysize=args.keysize,
+        ),
         "certreq": handle_certreq,
     }
     return handlers[args.command]()
