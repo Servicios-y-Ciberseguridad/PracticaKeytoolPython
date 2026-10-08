@@ -6,6 +6,7 @@ import argparse
 import getpass
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -29,7 +30,6 @@ except ModuleNotFoundError as exc:
     CRYPTO_IMPORT_ERROR = exc
 else:
     CRYPTO_IMPORT_ERROR = None
-
 
 CommandHandler = Callable[[], int]
 DEFAULT_KEYSTORE = Path("keystore.myks")
@@ -70,6 +70,7 @@ def load_keystore(path: Path, password: str) -> dict[str, KeyEntry]:
         data = path.read_bytes()
     except FileNotFoundError:
         return {}
+    
     offset = len(STORE_HEADER)
 
     if not data.startswith(STORE_HEADER) or len(data) < offset + 16 + 12 + 16:
@@ -150,6 +151,7 @@ def read_password(prompt: str) -> str:
     # getpass no debe recurrir a una entrada con eco si no hay terminal seguro.
     with warnings.catch_warnings():
         warnings.simplefilter("error", getpass.GetPassWarning)
+
         return getpass.getpass(prompt)
 
 def read_required(prompt: str) -> str:
@@ -273,7 +275,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         return handoff_result
     
     parser = build_parser()
-    args = parser.parse_args(argv)
+    arguments = list(argv) if argv is not None else sys.argv[1:]
+
+    if not arguments:
+        try:
+            while True:
+                command_line = input(
+                    "Introduce un comando (por ejemplo, --genkeypair): "
+                ).strip()
+                if command_line:
+                    break
+            lexer = shlex.shlex(command_line, posix=True)
+            lexer.whitespace_split = True
+            lexer.commenters = ""
+            lexer.escape = ""
+            arguments = list(lexer)
+        except (EOFError, KeyboardInterrupt):
+            print("\nError: no se recibio ningun comando.", file=sys.stderr)
+            return 1
+
+    args = parser.parse_args(arguments)
 
     handlers: dict[str, CommandHandler] = {
         "genkeypair": lambda: handle_genkeypair(
@@ -288,7 +309,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         "certreq": handle_certreq,
     }
-    
+
     return handlers[args.command]()
 
 if __name__ == "__main__":

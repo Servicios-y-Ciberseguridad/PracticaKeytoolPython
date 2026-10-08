@@ -233,6 +233,15 @@ class GenKeyPairTests(unittest.TestCase):
             self.assertEqual(mykeytool.main(["--certreq"]), 0)
         self.assertIn("--certreq seleccionado", output.getvalue())
 
+    def test_prompts_for_command_when_no_arguments_are_given(self):
+        with (
+            patch("builtins.input", side_effect=["", "--certreq"]) as prompt,
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(mykeytool.main([]), 0)
+        self.assertEqual(prompt.call_count, 2)
+        self.assertIn("--certreq seleccionado", output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
