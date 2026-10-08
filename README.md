@@ -69,25 +69,49 @@ Pr-cticaKeytoolPython/
 
 ## Uso previsto
 
-El programa actual se ejecuta desde la línea de comandos asi:
+Si ejecutas el programa sin parametros, muestra solo los comandos disponibles:
 
 ```bash
-python mykeytool.py --genkeypair
+python mykeytool.py
+```
+
+Para ver la ayuda especifica de `genkeypair`, usa:
+
+```bash
+python mykeytool.py -genkeypair -h
+python mykeytool.py -genkeypair --help
+```
+
+El flujo mas simple para generar un par de claves es:
+
+```bash
+python mykeytool.py --genkeypair -keyalg RSA
 python mykeytool.py --certreq
 ```
 
 Tambien admite una sintaxis parecida a `keytool` para `genkeypair`:
 
 ```bash
-python mykeytool.py -genkeypair -alias mykey -keyalg RSA -keysize 2048 -dname "CN=Ana, OU=TI, O=Empresa, L=Madrid, ST=Madrid, C=ES" -storepass test-password-123
+python mykeytool.py -genkeypair -alias mykey -keyalg RSA -keysize 2048 -storepass test-password-123 -keypass test-password-123 -dname "CN=Ana, OU=TI, O=Empresa, L=Madrid, ST=Madrid, C=ES"
 ```
 
-`--genkeypair` y `-genkeypair` solicitan por consola la contrasena del KeyStore, un alias y los campos del DN si faltan argumentos. Si `python` apunta a un interprete sin `cryptography`, el script intentara reejecutarse automaticamente con `.venv`. `--certreq` sigue siendo un marcador para la siguiente fase del proyecto.
+`--genkeypair` y `-genkeypair` aceptan parametros estilo `keytool`, pero tambien completan por consola los que falten. En el flujo interactivo actual se solicitan, segun falten:
+
+- `keyalg`
+- `keysize` con valor por defecto `2048`
+- contrasena del KeyStore
+- contrasena de la clave (`RETURN` reutiliza la del KeyStore)
+- alias con valor por defecto `mykey`
+- DN: `CN`, `OU`, `O`, `L`, `ST` y `C`
+
+En los campos interactivos del DN se puede pulsar `Enter` para dejar el valor vacio. En ese caso, el programa guarda `Unknown` en ese campo. Antes de crear el archivo, siempre muestra un resumen del DN y pide confirmacion final con `yes` o `no`.
+
+La clave privada se guarda cifrada con `keypass`. Si `python` apunta a un interprete sin `cryptography`, el script intentara reejecutarse automaticamente con `.venv`. `--certreq` sigue siendo un marcador para la siguiente fase del proyecto.
 
 Si quieres forzar manualmente el interprete del entorno virtual, usa:
 
 ```powershell
-.\.venv\Scripts\python.exe .\mykeytool.py --genkeypair
+.\.venv\Scripts\python.exe .\mykeytool.py --genkeypair -keyalg RSA
 ```
 
 ## Ejemplo de funcionalidad
