@@ -162,7 +162,13 @@ def read_required(prompt: str) -> str:
     
     return value
 
-def handle_genkeypair(path: Path = DEFAULT_KEYSTORE) -> int:
+def handle_genkeypair(path: Path = DEFAULT_KEYSTORE, *, 
+                        alias: str | None = None,
+                        storepass: str | None = None,
+                        keypass: str | None = None,
+                        dname: str | None = None,
+                        keyalg: str = "RSA",
+                        keysize: int = 2048,) -> int:
     """Genera un par RSA y guarda la entrada en un almacen cifrado."""
     try:
         ensure_crypto_available()
@@ -275,26 +281,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return handoff_result
     
     parser = build_parser()
-    arguments = list(argv) if argv is not None else sys.argv[1:]
-
-    if not arguments:
-        try:
-            while True:
-                command_line = input(
-                    "Introduce un comando (por ejemplo, --genkeypair): "
-                ).strip()
-                if command_line:
-                    break
-            lexer = shlex.shlex(command_line, posix=True)
-            lexer.whitespace_split = True
-            lexer.commenters = ""
-            lexer.escape = ""
-            arguments = list(lexer)
-        except (EOFError, KeyboardInterrupt):
-            print("\nError: no se recibio ningun comando.", file=sys.stderr)
-            return 1
-
-    args = parser.parse_args(arguments)
+    args = parser.parse_args(argv)
 
     handlers: dict[str, CommandHandler] = {
         "genkeypair": lambda: handle_genkeypair(
