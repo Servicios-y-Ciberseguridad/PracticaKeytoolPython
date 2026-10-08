@@ -6,6 +6,7 @@ import argparse
 import getpass
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import warnings
@@ -13,11 +14,21 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TypedDict
 
-from cryptography.exceptions import InvalidTag
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+try:
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+except ModuleNotFoundError as exc:
+    InvalidTag = None
+    serialization = None
+    rsa = None
+    AESGCM = None
+    Scrypt = None
+    CRYPTO_IMPORT_ERROR = exc
+else:
+    CRYPTO_IMPORT_ERROR = None
 
 
 CommandHandler = Callable[[], int]
@@ -32,13 +43,33 @@ class KeyEntry(TypedDict):
     dn: dict[str, str]
 
 
+def ensure_crypto_available() -> None:
+    if CRYPTO_IMPORT_ERROR is not None:
+        raise ModuleNotFoundError(
+            "No se pudo importar 'cryptography' con este interprete de Python."
+        ) from CRYPTO_IMPORT_ERROR
+
+
+def handoff_to_project_venv(argv: Sequence[str] | None) -> int | None:
+    if CRYPTO_IMPORT_ERROR is None:
+        return None
+    venv_python = Path(__file__).with_name(".venv") / "Scripts" / "python.exe"
+    current = Path(sys.executable).resolve()
+    if not venv_python.exists() or current == venv_python.resolve():
+        return None
+    command = [str(venv_python), str(Path(__file__).resolve()), *(argv or sys.argv[1:])]
+    return subprocess.run(command, check=False).returncode
+
+
 def derive_store_key(password: str, salt: bytes) -> bytes:
+    ensure_crypto_available()
     return Scrypt(salt=salt, length=32, n=2**17, r=8, p=1).derive(
         password.encode("utf-8")
     )
 
 
 def load_keystore(path: Path, password: str) -> dict[str, KeyEntry]:
+    ensure_crypto_available()
     try:
         data = path.read_bytes()
     except FileNotFoundError:
@@ -80,6 +111,7 @@ def load_keystore(path: Path, password: str) -> dict[str, KeyEntry]:
 
 
 def save_keystore(path: Path, password: str, entries: dict[str, KeyEntry]) -> None:
+    ensure_crypto_available()
     salt = os.urandom(16)
     nonce = os.urandom(12)
     plaintext = json.dumps(entries, ensure_ascii=True).encode("utf-8")
@@ -122,6 +154,7 @@ def read_required(prompt: str) -> str:
 def handle_genkeypair(path: Path = DEFAULT_KEYSTORE) -> int:
     """Genera un par RSA y guarda la entrada en un almacen cifrado."""
     try:
+        ensure_crypto_available()
         password = read_password("Contrasena del KeyStore: ")
         if not password:
             raise ValueError("La contrasena no puede estar vacia.")
@@ -212,6 +245,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Procesa los argumentos y ejecuta el manejador del comando elegido."""
+    handoff_result = handoff_to_project_venv(argv)
+    if handoff_result is not None:
+        return handoff_result
     parser = build_parser()
     args = parser.parse_args(argv)
 

@@ -18,14 +18,15 @@ Crear un programa Python que permita:
 - Python 3.10 o superior
 - pip
 - Entorno virtual recomendado
+- En Windows, usa el Python oficial de python.org para crear el entorno virtual
 
 ## Instalación
 
 1. Clona o descarga este repositorio.
-2. Crea un entorno virtual:
+2. Crea un entorno virtual con el Python oficial de Windows:
 
 ```bash
-python -m venv env
+py -3.14 -m venv .venv
 ```
 
 3. Activa el entorno virtual:
@@ -33,13 +34,13 @@ python -m venv env
 - Windows (PowerShell):
 
 ```powershell
-.\env\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 ```
 
 - Windows (CMD):
 
 ```cmd
-env\Scripts\activate.bat
+.venv\Scripts\activate.bat
 ```
 
 4. Instala las dependencias:
@@ -47,6 +48,8 @@ env\Scripts\activate.bat
 ```bash
 pip install -r requirements.txt
 ```
+
+Si ya tienes un entorno creado con MSYS2 o MinGW, recrealo con el Python oficial de Windows para poder instalar `cryptography` sin errores de compatibilidad.
 
 ## Dependencias
 
@@ -59,49 +62,26 @@ Pr-cticaKeytoolPython/
 ├── mykeytool.py          # Programa principal
 ├── README.md            # Documentación del proyecto
 ├── requirements.txt     # Dependencias del proyecto
-├── env/                 # Entorno virtual (opcional)
+├── .venv/               # Entorno virtual recomendado
+├── env/                 # Entorno virtual antiguo (opcional)
 └── .gitignore           # Archivos ignorados por Git
 ```
 
-## Generar un par de claves
+## Uso previsto
 
-```powershell
+El programa actual se ejecuta desde la línea de comandos asi:
+
+```bash
 python mykeytool.py --genkeypair
-python mykeytool.py --genkeypair --keystore personal.myks
+python mykeytool.py --certreq
 ```
 
-La operacion solicita una contrasena sin eco, un alias unico y los campos
-DN CN, OU, O, L, ST y C. Todos son obligatorios; C debe contener dos letras
-(por ejemplo, ES). Los alias distinguen mayusculas y minusculas.
-Para un almacen nuevo, la contrasena debe tener al menos ocho caracteres y
-se solicita confirmacion. Si no hay un terminal que permita ocultarla, la
-operacion falla en lugar de mostrar la contrasena.
+`--genkeypair` solicita por consola la contrasena del KeyStore, un alias unico y los campos del DN. Si `python` apunta a un interprete sin `cryptography`, el script intentara reejecutarse automaticamente con `.venv`. `--certreq` sigue siendo un marcador para la siguiente fase del proyecto.
 
-Se genera una clave RSA de **2048 bits**, con exponente publico 65537.
-La entrada contiene la clave privada PKCS#8, la publica y los campos DN.
-No se genera un certificado. Las entradas existentes se conservan y los
-alias duplicados se rechazan sin modificar el archivo.
-
-Por defecto se utiliza `keystore.myks` en el directorio de trabajo.
-Es un **formato propio, no compatible con JKS ni PKCS#12**:
-todo el contenido (incluidas claves, alias y DN) se cifra y autentica con
-AES-256-GCM. La clave de cifrado se deriva de la contrasena mediante scrypt
-(N=131072, r=8, p=1), con sal aleatoria de 16 bytes. Cada escritura utiliza
-una nueva sal y un nonce aleatorio de 12 bytes. Un temporal cifrado en el
-mismo directorio se reemplaza atomicamente para evitar archivos parciales.
-Utiliza una contrasena larga y unica y restringe los permisos del directorio
-con las herramientas del sistema operativo. No ejecutes escritores
-simultaneos sobre el mismo almacen.
-
-Se informa de exito o error; los codigos de salida son 0 y 1 respectivamente
-(2 para argumentos incorrectos). Una contrasena incorrecta, un archivo
-alterado o un fallo de escritura no se notifican como exito.
-La opcion `--certreq` sigue siendo un punto de entrada pendiente de implementar.
-
-## Pruebas
+Si quieres forzar manualmente el interprete del entorno virtual, usa:
 
 ```powershell
-python -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe .\mykeytool.py --genkeypair
 ```
 
 ## Ejemplo de funcionalidad
