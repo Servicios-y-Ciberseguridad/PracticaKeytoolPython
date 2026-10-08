@@ -36,12 +36,10 @@ DEFAULT_KEYSTORE = Path("keystore.myks")
 STORE_HEADER = b"MYKEYSTORE\x01"
 DN_FIELDS = ("CN", "OU", "O", "L", "ST", "C")
 
-
 class KeyEntry(TypedDict):
     private_key: str
     public_key: str
     dn: dict[str, str]
-
 
 def ensure_crypto_available() -> None:
     if CRYPTO_IMPORT_ERROR is not None:
@@ -156,27 +154,34 @@ def read_password(prompt: str) -> str:
 
 def read_required(prompt: str) -> str:
     value = input(prompt).strip()
+
     if not value:
         raise ValueError("Los campos solicitados no pueden estar vacios.")
+    
     return value
-
 
 def handle_genkeypair(path: Path = DEFAULT_KEYSTORE) -> int:
     """Genera un par RSA y guarda la entrada en un almacen cifrado."""
     try:
         ensure_crypto_available()
         algorithm = keyalg.upper()
+
         if algorithm != "RSA":
             raise ValueError("Solo se admite -keyalg RSA en esta implementacion.")
+        
         if keysize < 1024:
             raise ValueError("-keysize debe ser un entero de al menos 1024 bits.")
+        
         if keypass is not None and not keypass:
             raise ValueError("-keypass no puede estar vacio.")
+        
         password = read_store_password(path, storepass)
         entries = load_keystore(path, password)
         alias = resolve_alias(alias)
+
         if alias in entries:
             raise ValueError(f"El alias '{alias}' ya existe.")
+        
         dn = resolve_dname(dname)
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=keysize)
         entries[alias] = KeyEntry(
@@ -191,17 +196,22 @@ def handle_genkeypair(path: Path = DEFAULT_KEYSTORE) -> int:
             ).decode("ascii"),
             dn=dn,
         )
+
         save_keystore(path, password, entries)
+
     except getpass.GetPassWarning:
         print("Error: no hay un terminal disponible para ocultar la contrasena.", file=sys.stderr)
         return 1
     except (OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
+
         return 1
     except (EOFError, KeyboardInterrupt):
         print("\nError: operacion cancelada; no se ha guardado la entrada.", file=sys.stderr)
+
         return 1
     print(f"Exito: par {algorithm} de {keysize} bits guardado con alias '{alias}' en '{path}'.")
+
     return 0
 
 def handle_certreq() -> int:
@@ -245,6 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_KEYSTORE,
         help="archivo del almacen propio cifrado (por defecto: keystore.myks)",
     )
+
     parser.add_argument("-alias", help="alias de la entrada a generar")
     parser.add_argument("-dname", help="DN en formato CN=..., OU=..., O=..., L=..., ST=..., C=...")
     parser.add_argument("-storepass", help="contrasena del KeyStore")
@@ -257,8 +268,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     """Procesa los argumentos y ejecuta el manejador del comando elegido."""
     handoff_result = handoff_to_project_venv(argv)
+
     if handoff_result is not None:
         return handoff_result
+    
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -272,8 +285,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             keyalg=args.keyalg,
             keysize=args.keysize,
         ),
+
         "certreq": handle_certreq,
     }
+    
     return handlers[args.command]()
 
 if __name__ == "__main__":
