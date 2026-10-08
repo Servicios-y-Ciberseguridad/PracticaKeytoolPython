@@ -330,6 +330,181 @@ class GenKeyPairTests(unittest.TestCase):
             self.assertIn(message, errors)
             self.assertEqual(self.path.read_bytes(), before)
 
+    def test_existing_keystore_allows_three_password_attempts(self):
+        self.assertEqual(self.generate()[0], 0)
+        output = io.StringIO()
+        errors = io.StringIO()
+        answers = ["segunda", "Ana", "TI", "Empresa", "Madrid", "Madrid", "ES", "yes"]
+        with (
+            patch(
+                "mykeytool.getpass.getpass",
+                side_effect=["wrong-1", "wrong-2", self.password, ""],
+            ) as getpass_mock,
+            patch("builtins.input", side_effect=answers),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(errors),
+        ):
+            result = mykeytool.main([
+                "-genkeypair",
+                "-keystore",
+                str(self.path),
+                "-keyalg",
+                "RSA",
+                "-keysize",
+                "2048",
+            ])
+        self.assertEqual(result, 0, errors.getvalue())
+        self.assertIn("Intentos restantes: 2", errors.getvalue())
+        self.assertIn("Intentos restantes: 1", errors.getvalue())
+        self.assertTrue(getpass_mock.called)
+        entries = mykeytool.load_keystore(self.path, self.password)
+        self.assertIn("segunda", entries)
+
+    def test_existing_keystore_fails_after_three_wrong_password_attempts(self):
+        self.assertEqual(self.generate()[0], 0)
+        before = self.path.read_bytes()
+        output = io.StringIO()
+        errors = io.StringIO()
+        with (
+            patch(
+                "mykeytool.getpass.getpass",
+                side_effect=["wrong-1", "wrong-2", "wrong-3"],
+            ),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(errors),
+        ):
+            result = mykeytool.main([
+                "-genkeypair",
+                "-keystore",
+                str(self.path),
+                "-keyalg",
+                "RSA",
+                "-keysize",
+                "2048",
+            ])
+        self.assertEqual(result, 1)
+        self.assertIn("Se agotaron los 3 intentos", errors.getvalue())
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_new_keystore_allows_three_attempts_for_short_or_mismatched_password(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        answers = ["miClave", "Ana", "TI", "Empresa", "Madrid", "Madrid", "ES", "yes"]
+        with (
+            patch(
+                "mykeytool.getpass.getpass",
+                side_effect=[
+                    "short",
+                    "test-password-123",
+                    "different",
+                    "test-password-123",
+                    "test-password-123",
+                    "",
+                ],
+            ),
+            patch("builtins.input", side_effect=answers),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(errors),
+        ):
+            result = mykeytool.main([
+                "-genkeypair",
+                "-keystore",
+                str(self.path),
+                "-keyalg",
+                "RSA",
+                "-keysize",
+                "2048",
+            ])
+        self.assertEqual(result, 0, errors.getvalue())
+        self.assertIn("8 caracteres", errors.getvalue())
+        self.assertIn("no coinciden", errors.getvalue())
+        self.assertTrue(self.path.exists())
+
+    def test_new_keystore_fails_after_three_invalid_password_attempts(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        with (
+            patch(
+                "mykeytool.getpass.getpass",
+                side_effect=["short", "tiny", "small"],
+            ),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(errors),
+        ):
+            result = mykeytool.main([
+                "-genkeypair",
+                "-keystore",
+                str(self.path),
+                "-keyalg",
+                "RSA",
+                "-keysize",
+                "2048",
+            ])
+        self.assertEqual(result, 1)
+        self.assertIn("Se agotaron los 3 intentos", errors.getvalue())
+        self.assertFalse(self.path.exists())
+
+    def test_duplicate_alias_allows_three_interactive_attempts(self):
+        self.assertEqual(self.generate()[0], 0)
+        output = io.StringIO()
+        errors = io.StringIO()
+        answers = [
+            "miClave",
+            "miClave",
+            "segunda",
+            "Ana",
+            "TI",
+            "Empresa",
+            "Madrid",
+            "Madrid",
+            "ES",
+            "yes",
+        ]
+        with (
+            patch("mykeytool.getpass.getpass", side_effect=[self.password, ""]),
+            patch("builtins.input", side_effect=answers),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(errors),
+        ):
+            result = mykeytool.main([
+                "-genkeypair",
+                "-keystore",
+                str(self.path),
+                "-keyalg",
+                "RSA",
+                "-keysize",
+                "2048",
+            ])
+        self.assertEqual(result, 0, errors.getvalue())
+        self.assertIn("Intentos restantes: 2", errors.getvalue())
+        entries = mykeytool.load_keystore(self.path, self.password)
+        self.assertIn("segunda", entries)
+
+    def test_duplicate_alias_fails_after_three_interactive_attempts(self):
+        self.assertEqual(self.generate()[0], 0)
+        before = self.path.read_bytes()
+        output = io.StringIO()
+        errors = io.StringIO()
+        answers = ["miClave", "miClave", "miClave"]
+        with (
+            patch("mykeytool.getpass.getpass", side_effect=[self.password]),
+            patch("builtins.input", side_effect=answers),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(errors),
+        ):
+            result = mykeytool.main([
+                "-genkeypair",
+                "-keystore",
+                str(self.path),
+                "-keyalg",
+                "RSA",
+                "-keysize",
+                "2048",
+            ])
+        self.assertEqual(result, 1)
+        self.assertIn("Se agotaron los 3 intentos", errors.getvalue())
+        self.assertEqual(self.path.read_bytes(), before)
+
     def test_tampered_or_invalid_store_is_not_overwritten(self):
         self.assertEqual(self.generate()[0], 0)
         data = self.path.read_bytes()
@@ -381,6 +556,84 @@ class GenKeyPairTests(unittest.TestCase):
             entry["dn"],
             dict(zip(mykeytool.DN_FIELDS, [mykeytool.UNKNOWN_DN_VALUE] * len(mykeytool.DN_FIELDS))),
         )
+
+    def test_blank_confirmation_reasks_all_distinguished_name_fields(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        answers = [
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "Ana",
+            "TI",
+            "Empresa",
+            "Madrid",
+            "Madrid",
+            "ES",
+            "yes",
+        ]
+        with (
+            patch("mykeytool.getpass.getpass", side_effect=[self.password, self.password, ""]),
+            patch("builtins.input", side_effect=["mykey", *answers]),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(errors),
+        ):
+            result = mykeytool.main([
+                "-genkeypair",
+                "-keystore",
+                str(self.path),
+                "-keyalg",
+                "RSA",
+                "-keysize",
+                "2048",
+            ])
+        self.assertEqual(result, 0, errors.getvalue())
+        entry = mykeytool.load_keystore(self.path, self.password)["mykey"]
+        self.assertEqual(entry["dn"]["CN"], "Ana")
+        self.assertEqual(entry["dn"]["C"], "ES")
+
+    def test_no_confirmation_reasks_all_distinguished_name_fields(self):
+        output = io.StringIO()
+        errors = io.StringIO()
+        answers = [
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "no",
+            "Ana Dos",
+            "Seguridad",
+            "Empresa",
+            "Sevilla",
+            "Andalucia",
+            "ES",
+            "yes",
+        ]
+        with (
+            patch("mykeytool.getpass.getpass", side_effect=[self.password, self.password, ""]),
+            patch("builtins.input", side_effect=["mykey", *answers]),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(errors),
+        ):
+            result = mykeytool.main([
+                "-genkeypair",
+                "-keystore",
+                str(self.path),
+                "-keyalg",
+                "RSA",
+                "-keysize",
+                "2048",
+            ])
+        self.assertEqual(result, 0, errors.getvalue())
+        entry = mykeytool.load_keystore(self.path, self.password)["mykey"]
+        self.assertEqual(entry["dn"]["CN"], "Ana Dos")
+        self.assertEqual(entry["dn"]["OU"], "Seguridad")
 
     def test_short_or_mismatched_password_fails(self):
         self.assertEqual(self.generate(password="short")[0], 1)

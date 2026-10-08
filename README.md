@@ -106,6 +106,32 @@ python mykeytool.py -genkeypair -alias mykey -keyalg RSA -keysize 2048 -dname "C
 
 En los campos interactivos del DN se puede pulsar `Enter` para dejar el valor vacio. En ese caso, el programa guarda `Unknown` en ese campo. Antes de crear el archivo, siempre muestra un resumen del DN y pide confirmacion final con `yes` o `no`.
 
+Ejemplo de flujo interactivo:
+
+```text
+> python mykeytool.py -genkeypair -keyalg RSA
+Enter key size [2048]:
+Enter keystore password:
+Re-enter new password:
+Enter key alias [mykey]:
+Enter key password for <mykey> (RETURN if same as keystore password):
+What is your first and last name? [Unknown]:
+What is the name of your organizational unit? [Unknown]:
+What is the name of your organization? [Unknown]:
+What is the name of your City or Locality? [Unknown]:
+What is the name of your State or Province? [Unknown]:
+What is the two-letter country code for this unit? [Unknown]:
+Is CN=Unknown, OU=Unknown, O=Unknown, L=Unknown, ST=Unknown, C=Unknown correct? [no/yes]: no
+What is your first and last name? [Unknown]: Ana Perez
+What is the name of your organizational unit? [Unknown]: Seguridad
+What is the name of your organization? [Unknown]: Empresa
+What is the name of your City or Locality? [Unknown]: Madrid
+What is the name of your State or Province? [Unknown]: Madrid
+What is the two-letter country code for this unit? [Unknown]: ES
+Is CN=Ana Perez, OU=Seguridad, O=Empresa, L=Madrid, ST=Madrid, C=ES correct? [no/yes]: yes
+Exito: par RSA de 2048 bits guardado con alias 'mykey' en 'keystore.myks'.
+```
+
 La clave privada se guarda cifrada con `keypass`. Si `python` apunta a un interprete sin `cryptography`, el script intentara reejecutarse automaticamente con `.venv`. `--certreq` sigue siendo un marcador para la siguiente fase del proyecto.
 
 ### Formato y recuperación del KeyStore

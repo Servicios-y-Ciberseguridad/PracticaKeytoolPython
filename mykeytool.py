@@ -39,6 +39,8 @@ STORE_NONCE_SIZE = 12
 AES_GCM_TAG_SIZE = 16
 DN_FIELDS = ("CN", "OU", "O", "L", "ST", "C")
 UNKNOWN_DN_VALUE = "Unknown"
+MAX_PASSWORD_ATTEMPTS = 3
+MAX_ALIAS_ATTEMPTS = 3
 
 class KeyEntry(TypedDict):
     private_key: str
@@ -264,6 +266,8 @@ def read_dname_interactively() -> dict[str, str]:
         confirmation = input(f"Is {rendered} correct? [no/yes]: ").strip().lower()
         if confirmation in {"y", "yes", "s", "si", "sí"}:
             return dn
+        if confirmation in {"", "n", "no"}:
+            continue
 
 
 def resolve_dname(dname: str | None) -> dict[str, str]:
@@ -287,6 +291,59 @@ def read_store_password(path: Path, storepass: str | None) -> str:
         if storepass is None and read_password("Re-enter new password: ") != password:
             raise ValueError("Las contrasenas no coinciden.")
     return password
+
+
+def open_keystore_with_password(
+    path: Path, storepass: str | None
+) -> tuple[str, dict[str, KeyEntry]]:
+    if not path.exists():
+        if storepass is not None:
+            password = read_store_password(path, storepass)
+            return password, {}
+        last_error: ValueError | None = None
+        for attempt in range(1, MAX_PASSWORD_ATTEMPTS + 1):
+            try:
+                password = read_store_password(path, None)
+                return password, {}
+            except ValueError as exc:
+                last_error = exc
+                if str(exc) not in {
+                    "La contrasena debe tener al menos 8 caracteres.",
+                    "Las contrasenas no coinciden.",
+                }:
+                    raise
+                remaining_attempts = MAX_PASSWORD_ATTEMPTS - attempt
+                if remaining_attempts == 0:
+                    raise ValueError(f"{exc} Se agotaron los 3 intentos.") from exc
+                print(
+                    f"Error: {exc} Intentos restantes: {remaining_attempts}.",
+                    file=sys.stderr,
+                )
+        assert last_error is not None
+        raise last_error
+    if storepass is not None:
+        password = read_store_password(path, storepass)
+        return password, load_keystore(path, password)
+    last_error: ValueError | None = None
+    for attempt in range(1, MAX_PASSWORD_ATTEMPTS + 1):
+        password = read_store_password(path, None)
+        try:
+            return password, load_keystore(path, password)
+        except ValueError as exc:
+            last_error = exc
+            if str(exc) != "Contrasena incorrecta o KeyStore alterado.":
+                raise
+            remaining_attempts = MAX_PASSWORD_ATTEMPTS - attempt
+            if remaining_attempts == 0:
+                raise ValueError(
+                    "Contrasena incorrecta o KeyStore alterado. Se agotaron los 3 intentos."
+                ) from exc
+            print(
+                f"Error: contrasena incorrecta. Intentos restantes: {remaining_attempts}.",
+                file=sys.stderr,
+            )
+    assert last_error is not None
+    raise last_error
 
 
 def resolve_key_password(keypass: str | None, storepass: str, alias: str) -> str:
@@ -319,6 +376,28 @@ def resolve_alias(alias: str | None) -> str:
     return resolved
 
 
+def resolve_unique_alias(alias: str | None, entries: dict[str, KeyEntry]) -> str:
+    if alias is not None:
+        resolved = resolve_alias(alias)
+        if resolved in entries:
+            raise ValueError(f"El alias '{resolved}' ya existe.")
+        return resolved
+    last_alias = ""
+    for attempt in range(1, MAX_ALIAS_ATTEMPTS + 1):
+        resolved = resolve_alias(None)
+        last_alias = resolved
+        if resolved not in entries:
+            return resolved
+        remaining_attempts = MAX_ALIAS_ATTEMPTS - attempt
+        if remaining_attempts == 0:
+            raise ValueError(f"El alias '{resolved}' ya existe. Se agotaron los 3 intentos.")
+        print(
+            f"Error: El alias '{resolved}' ya existe. Intentos restantes: {remaining_attempts}.",
+            file=sys.stderr,
+        )
+    raise ValueError(f"El alias '{last_alias}' ya existe.")
+
+
 def handle_genkeypair(
     path: Path = DEFAULT_KEYSTORE,
     *,
@@ -334,12 +413,8 @@ def handle_genkeypair(
         ensure_crypto_available()
         algorithm = resolve_key_algorithm(keyalg)
         resolved_keysize = resolve_key_size(keysize)
-        password = read_store_password(path, storepass)
-        entries = load_keystore(path, password) if path.exists() else {}
-        alias = resolve_alias(alias)
-
-        if alias in entries:
-            raise ValueError(f"El alias '{alias}' ya existe.")
+        password, entries = open_keystore_with_password(path, storepass)
+        alias = resolve_unique_alias(alias, entries)
         key_password = resolve_key_password(keypass, password, alias)
         dn = resolve_dname(dname)
         private_key = rsa.generate_private_key(
