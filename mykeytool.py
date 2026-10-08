@@ -34,6 +34,9 @@ else:
 CommandHandler = Callable[[], int]
 DEFAULT_KEYSTORE = Path("keystore.myks")
 STORE_HEADER = b"MYKEYSTORE\x01"
+STORE_SALT_SIZE = 16
+STORE_NONCE_SIZE = 12
+AES_GCM_TAG_SIZE = 16
 DN_FIELDS = ("CN", "OU", "O", "L", "ST", "C")
 UNKNOWN_DN_VALUE = "Unknown"
 
@@ -74,28 +77,39 @@ def derive_store_key(password: str, salt: bytes) -> bytes:
     )
 
 def load_keystore(path: Path, password: str) -> dict[str, KeyEntry]:
+    """Load and validate a version-1 AES-GCM encrypted keystore."""
     ensure_crypto_available()
 
     try:
         data = path.read_bytes()
-    except FileNotFoundError:
-        return {}
-    offset = len(STORE_HEADER)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"No existe el KeyStore: '{path}'.") from exc
 
-    if not data.startswith(STORE_HEADER) or len(data) < offset + 16 + 12 + 16:
+    offset = len(STORE_HEADER)
+    minimum_size = (
+        offset + STORE_SALT_SIZE + STORE_NONCE_SIZE + AES_GCM_TAG_SIZE
+    )
+
+    if not data.startswith(STORE_HEADER) or len(data) < minimum_size:
         raise ValueError("Formato de KeyStore no valido.")
     
-    salt = data[offset : offset + 16]
-    nonce = data[offset + 16 : offset + 28]
+    salt_start = offset
+    nonce_start = salt_start + STORE_SALT_SIZE
+    ciphertext_start = nonce_start + STORE_NONCE_SIZE
+    salt = data[salt_start:nonce_start]
+    nonce = data[nonce_start:ciphertext_start]
 
     try:
         plaintext = AESGCM(derive_store_key(password, salt)).decrypt(
-            nonce, data[offset + 28 :], STORE_HEADER
+            nonce, data[ciphertext_start:], STORE_HEADER
         )
     except InvalidTag as exc:
         raise ValueError("Contrasena incorrecta o KeyStore alterado.") from exc
     
-    entries = json.loads(plaintext)
+    try:
+        entries = json.loads(plaintext.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Contenido de KeyStore no valido.") from exc
 
     if not isinstance(entries, dict):
         raise ValueError("Contenido de KeyStore no valido.")
@@ -125,12 +139,24 @@ def load_keystore(path: Path, password: str) -> dict[str, KeyEntry]:
         )
 
     return store
+    return store
+def load_keystore_entry(path: Path, alias: str, password: str) -> KeyEntry:
+    """Return one keystore entry after authenticating and decrypting the store."""
+    normalized_alias = alias.strip()
+    if not normalized_alias:
+        raise ValueError("El alias no puede estar vacio.")
+
+    entries = load_keystore(path, password)
+    try:
+        return entries[normalized_alias]
+    except KeyError as exc:
+        raise ValueError(f"No existe el alias '{normalized_alias}' en el KeyStore.") from exc
 
 def save_keystore(path: Path, password: str, entries: dict[str, KeyEntry]) -> None:
+    """Write a version-1 keystore: header, salt, nonce, then AES-GCM ciphertext."""
     ensure_crypto_available()
-
-    salt = os.urandom(16)
-    nonce = os.urandom(12)
+    salt = os.urandom(STORE_SALT_SIZE)
+    nonce = os.urandom(STORE_NONCE_SIZE)
 
     plaintext = json.dumps(entries, ensure_ascii=True).encode("utf-8")
     ciphertext = AESGCM(derive_store_key(password, salt)).encrypt(
@@ -224,6 +250,7 @@ def read_dname_interactively() -> dict[str, str]:
         "ST": "What is the name of your State or Province? [Unknown]: ",
         "C": "What is the two-letter country code for this unit? [Unknown]: ",
     }
+    
     while True:
         dn = {
             field: input(prompts[field]).strip() or UNKNOWN_DN_VALUE
@@ -305,7 +332,7 @@ def handle_genkeypair(
         algorithm = resolve_key_algorithm(keyalg)
         resolved_keysize = resolve_key_size(keysize)
         password = read_store_password(path, storepass)
-        entries = load_keystore(path, password)
+        entries = load_keystore(path, password) if path.exists() else {}
         alias = resolve_alias(alias)
 
         if alias in entries:

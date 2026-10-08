@@ -108,6 +108,44 @@ En los campos interactivos del DN se puede pulsar `Enter` para dejar el valor va
 
 La clave privada se guarda cifrada con `keypass`. Si `python` apunta a un interprete sin `cryptography`, el script intentara reejecutarse automaticamente con `.venv`. `--certreq` sigue siendo un marcador para la siguiente fase del proyecto.
 
+### Formato y recuperación del KeyStore
+
+El archivo binario tiene una versión identificada por su cabecera y esta distribución:
+
+```text
+MYKEYSTORE\\x01 | sal aleatoria de 16 bytes | nonce de 12 bytes | ciphertext y etiqueta GCM
+```
+
+El contenido cifrado es un objeto JSON UTF-8 con las entradas indexadas por alias. La clave de cifrado se deriva de la contraseña del almacén con Scrypt; AES-GCM cifra y autentica el contenido usando la cabecera como dato autenticado. El formato se versiona cambiando la cabecera si en el futuro cambia su estructura o sus parámetros.
+
+Para recuperar una entrada desde otro código Python, `load_keystore_entry` autentica y descifra el almacén y devuelve los datos asociados al alias. La contraseña del almacén no se guarda en el archivo:
+
+```python
+from getpass import getpass
+from pathlib import Path
+
+from mykeytool import load_keystore_entry
+
+store_password = getpass("Contraseña del KeyStore: ")
+entry = load_keystore_entry(Path("keystore.myks"), "mykey", store_password)
+print(entry["dn"])
+```
+
+El campo `private_key` que devuelve la función sigue cifrado con `keypass`. Para usar la clave privada, se necesita además esa contraseña (o la del almacén si se eligió reutilizarla):
+
+```python
+from cryptography.hazmat.primitives import serialization
+from getpass import getpass
+
+key_password = getpass("Contraseña de la clave: ")
+private_key = serialization.load_pem_private_key(
+    entry["private_key"].encode("ascii"),
+    password=key_password.encode("utf-8"),
+)
+```
+
+El cargador informa con `FileNotFoundError` si el almacén no existe y con `ValueError` si el formato, el contenido o la autenticación no son válidos. No uses `-storepass` ni `-keypass` en comandos compartidos: aunque no se guardan en el KeyStore, los argumentos de línea de comandos pueden quedar en el historial o ser visibles para otros procesos. Es más seguro omitirlos y escribir las contraseñas cuando el programa las solicite.
+
 Si quieres forzar manualmente el interprete del entorno virtual, usa:
 
 ```powershell
