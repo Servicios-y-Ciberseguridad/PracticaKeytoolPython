@@ -92,7 +92,7 @@ python mykeytool.py --certreq
 Tambien admite una sintaxis parecida a `keytool` para `genkeypair`:
 
 ```bash
-python mykeytool.py -genkeypair -alias mykey -keyalg RSA -keysize 2048 -storepass test-password-123 -keypass test-password-123 -dname "CN=Ana, OU=TI, O=Empresa, L=Madrid, ST=Madrid, C=ES"
+python mykeytool.py -genkeypair -alias mykey -keyalg RSA -keysize 2048 -dname "CN=Ana, OU=TI, O=Empresa, L=Madrid, ST=Madrid, C=ES"
 ```
 
 `--genkeypair` y `-genkeypair` aceptan parametros estilo `keytool`, pero tambien completan por consola los que falten. En el flujo interactivo actual se solicitan, segun falten:
