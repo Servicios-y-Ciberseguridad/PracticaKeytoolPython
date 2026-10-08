@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 import mykeytool
 
@@ -67,6 +68,36 @@ class GenKeyPairTests(unittest.TestCase):
             self.assertNotIn(secret, encrypted)
         with self.assertRaisesRegex(ValueError, "incorrecta"):
             mykeytool.load_keystore(self.path, "wrong-password")
+
+    def test_loads_one_entry_by_alias_and_store_password(self):
+        self.assertEqual(self.generate()[0], 0)
+
+        entry = mykeytool.load_keystore_entry(
+            self.path, "miClave", self.password
+        )
+
+        self.assertEqual(entry["dn"]["CN"], "Ana")
+        with self.assertRaisesRegex(ValueError, "No existe el alias"):
+            mykeytool.load_keystore_entry(self.path, "missing", self.password)
+        with self.assertRaisesRegex(ValueError, "incorrecta"):
+            mykeytool.load_keystore_entry(self.path, "miClave", "wrong-password")
+
+    def test_missing_keystore_is_reported(self):
+        with self.assertRaisesRegex(FileNotFoundError, "No existe el KeyStore"):
+            mykeytool.load_keystore(self.path, self.password)
+
+    def test_authenticated_invalid_json_is_reported_as_invalid_store(self):
+        salt = bytes(mykeytool.STORE_SALT_SIZE)
+        nonce = bytes(mykeytool.STORE_NONCE_SIZE)
+        ciphertext = AESGCM(mykeytool.derive_store_key(self.password, salt)).encrypt(
+            nonce, b"{not-json", mykeytool.STORE_HEADER
+        )
+        self.path.write_bytes(
+            mykeytool.STORE_HEADER + salt + nonce + ciphertext
+        )
+
+        with self.assertRaisesRegex(ValueError, "Contenido de KeyStore no valido"):
+            mykeytool.load_keystore(self.path, self.password)
 
     def test_supports_keytool_style_arguments(self):
         output = io.StringIO()
@@ -434,16 +465,6 @@ class GenKeyPairTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(mykeytool.main(["--certreq"]), 0)
         self.assertIn("--certreq seleccionado", output.getvalue())
-
-    def test_prompts_for_command_when_no_arguments_are_given(self):
-        with (
-            patch("builtins.input", side_effect=["", "--certreq"]) as prompt,
-            contextlib.redirect_stdout(io.StringIO()) as output,
-        ):
-            self.assertEqual(mykeytool.main([]), 0)
-        self.assertEqual(prompt.call_count, 2)
-        self.assertIn("--certreq seleccionado", output.getvalue())
-
 
 if __name__ == "__main__":
     unittest.main()

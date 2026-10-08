@@ -34,6 +34,9 @@ else:
 CommandHandler = Callable[[], int]
 DEFAULT_KEYSTORE = Path("keystore.myks")
 STORE_HEADER = b"MYKEYSTORE\x01"
+STORE_SALT_SIZE = 16
+STORE_NONCE_SIZE = 12
+AES_GCM_TAG_SIZE = 16
 DN_FIELDS = ("CN", "OU", "O", "L", "ST", "C")
 UNKNOWN_DN_VALUE = "Unknown"
 
@@ -74,29 +77,39 @@ def derive_store_key(password: str, salt: bytes) -> bytes:
     )
 
 def load_keystore(path: Path, password: str) -> dict[str, KeyEntry]:
+    """Load and validate a version-1 AES-GCM encrypted keystore."""
     ensure_crypto_available()
 
     try:
         data = path.read_bytes()
-    except FileNotFoundError:
-        return {}
-    
-    offset = len(STORE_HEADER)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"No existe el KeyStore: '{path}'.") from exc
 
-    if not data.startswith(STORE_HEADER) or len(data) < offset + 16 + 12 + 16:
+    offset = len(STORE_HEADER)
+    minimum_size = (
+        offset + STORE_SALT_SIZE + STORE_NONCE_SIZE + AES_GCM_TAG_SIZE
+    )
+
+    if not data.startswith(STORE_HEADER) or len(data) < minimum_size:
         raise ValueError("Formato de KeyStore no valido.")
     
-    salt = data[offset : offset + 16]
-    nonce = data[offset + 16 : offset + 28]
+    salt_start = offset
+    nonce_start = salt_start + STORE_SALT_SIZE
+    ciphertext_start = nonce_start + STORE_NONCE_SIZE
+    salt = data[salt_start:nonce_start]
+    nonce = data[nonce_start:ciphertext_start]
 
     try:
         plaintext = AESGCM(derive_store_key(password, salt)).decrypt(
-            nonce, data[offset + 28 :], STORE_HEADER
+            nonce, data[ciphertext_start:], STORE_HEADER
         )
     except InvalidTag as exc:
         raise ValueError("Contrasena incorrecta o KeyStore alterado.") from exc
     
-    entries = json.loads(plaintext)
+    try:
+        entries = json.loads(plaintext.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Contenido de KeyStore no valido.") from exc
 
     if not isinstance(entries, dict):
         raise ValueError("Contenido de KeyStore no valido.")
@@ -127,11 +140,25 @@ def load_keystore(path: Path, password: str) -> dict[str, KeyEntry]:
 
     return store
 
-def save_keystore(path: Path, password: str, entries: dict[str, KeyEntry]) -> None:
-    ensure_crypto_available()
 
-    salt = os.urandom(16)
-    nonce = os.urandom(12)
+def load_keystore_entry(path: Path, alias: str, password: str) -> KeyEntry:
+    """Return one keystore entry after authenticating and decrypting the store."""
+    normalized_alias = alias.strip()
+    if not normalized_alias:
+        raise ValueError("El alias no puede estar vacio.")
+
+    entries = load_keystore(path, password)
+
+    try:
+        return entries[normalized_alias]
+    except KeyError as exc:
+        raise ValueError(f"No existe el alias '{normalized_alias}' en el KeyStore.") from exc
+
+def save_keystore(path: Path, password: str, entries: dict[str, KeyEntry]) -> None:
+    """Write a version-1 keystore: header, salt, nonce, then AES-GCM ciphertext."""
+    ensure_crypto_available()
+    salt = os.urandom(STORE_SALT_SIZE)
+    nonce = os.urandom(STORE_NONCE_SIZE)
 
     plaintext = json.dumps(entries, ensure_ascii=True).encode("utf-8")
     ciphertext = AESGCM(derive_store_key(password, salt)).encrypt(
@@ -172,14 +199,143 @@ def read_required(prompt: str) -> str:
     
     return value
 
-def handle_genkeypair(path: Path = DEFAULT_KEYSTORE) -> int:
+def resolve_key_algorithm(keyalg: str | None) -> str:
+    value = keyalg.strip() if keyalg is not None else read_required("Enter key algorithm: ")
+    algorithm = value.upper()
+    if algorithm != "RSA":
+        raise ValueError("Solo se admite -keyalg RSA en esta implementacion.")
+    return algorithm
+
+
+def resolve_key_size(keysize: int | None) -> int:
+    if keysize is not None:
+        resolved = keysize
+    else:
+        entered = input("Enter key size [2048]: ").strip()
+        resolved = 2048 if entered == "" else int(entered)
+    if resolved < 1024:
+        raise ValueError("-keysize debe ser un entero de al menos 1024 bits.")
+    return resolved
+
+
+def parse_dname(dname: str) -> dict[str, str]:
+    parts = [part.strip() for part in dname.split(",") if part.strip()]
+    values: dict[str, str] = {}
+    for part in parts:
+        key, separator, value = part.partition("=")
+        field = key.strip().upper()
+        normalized = value.strip()
+        if not separator or field not in DN_FIELDS or not normalized:
+            raise ValueError("-dname debe usar el formato CN=..., OU=..., O=..., L=..., ST=..., C=...")
+        if field in values:
+            raise ValueError(f"-dname repite el campo '{field}'.")
+        values[field] = normalized
+    if set(values) != set(DN_FIELDS):
+        raise ValueError("-dname debe incluir exactamente CN, OU, O, L, ST y C.")
+    return values
+
+
+def validate_country(dn: dict[str, str]) -> None:
+    country = dn["C"]
+    if country == UNKNOWN_DN_VALUE:
+        return
+    if len(country) != 2 or not country.isascii() or not country.isalpha():
+        raise ValueError("C debe ser un codigo de pais de dos letras (p. ej. ES).")
+    dn["C"] = country.upper()
+
+
+def read_dname_interactively() -> dict[str, str]:
+    prompts = {
+        "CN": "What is your first and last name? [Unknown]: ",
+        "OU": "What is the name of your organizational unit? [Unknown]: ",
+        "O": "What is the name of your organization? [Unknown]: ",
+        "L": "What is the name of your City or Locality? [Unknown]: ",
+        "ST": "What is the name of your State or Province? [Unknown]: ",
+        "C": "What is the two-letter country code for this unit? [Unknown]: ",
+    }
+
+    while True:
+        dn = {
+            field: input(prompts[field]).strip() or UNKNOWN_DN_VALUE
+            for field in DN_FIELDS
+        }
+        validate_country(dn)
+        rendered = ", ".join(f"{field}={dn[field]}" for field in DN_FIELDS)
+        confirmation = input(f"Is {rendered} correct? [no/yes]: ").strip().lower()
+        if confirmation in {"y", "yes", "s", "si", "sí"}:
+            return dn
+
+
+def resolve_dname(dname: str | None) -> dict[str, str]:
+    if dname is not None:
+        parsed = parse_dname(dname)
+        validate_country(parsed)
+        return parsed
+    return read_dname_interactively()
+
+
+def read_store_password(path: Path, storepass: str | None) -> str:
+    if storepass is not None:
+        password = storepass
+    else:
+        password = read_password("Enter keystore password: ")
+    if not password:
+        raise ValueError("La contrasena no puede estar vacia.")
+    if not path.exists():
+        if len(password) < 8:
+            raise ValueError("La contrasena debe tener al menos 8 caracteres.")
+        if storepass is None and read_password("Re-enter new password: ") != password:
+            raise ValueError("Las contrasenas no coinciden.")
+    return password
+
+
+def resolve_key_password(keypass: str | None, storepass: str, alias: str) -> str:
+    if keypass is not None:
+        if not keypass:
+            raise ValueError("-keypass no puede estar vacio.")
+        return keypass
+    password = read_password(
+        f"Enter key password for <{alias}> (RETURN if same as keystore password): "
+    )
+    if password == "":
+        return storepass
+    if read_password("Re-enter key password: ") != password:
+        raise ValueError("Las contrasenas de la clave no coinciden.")
+    return password
+
+
+def resolve_alias(alias: str | None) -> str:
+    if alias is not None:
+        resolved = alias.strip()
+        if not resolved:
+            raise ValueError("Los campos solicitados no pueden estar vacios.")
+        return resolved
+    typed = input("Enter key alias [mykey]: ")
+    if typed == "":
+        return "mykey"
+    resolved = typed.strip()
+    if not resolved:
+        raise ValueError("Los campos solicitados no pueden estar vacios.")
+    return resolved
+
+
+def handle_genkeypair(
+    path: Path = DEFAULT_KEYSTORE,
+    *,
+    alias: str | None = None,
+    storepass: str | None = None,
+    keypass: str | None = None,
+    dname: str | None = None,
+    keyalg: str | None = None,
+    keysize: int | None = None,
+) -> int:
     """Genera un par RSA y guarda la entrada en un almacen cifrado."""
     try:
         ensure_crypto_available()
         algorithm = resolve_key_algorithm(keyalg)
         resolved_keysize = resolve_key_size(keysize)
         password = read_store_password(path, storepass)
-        entries = load_keystore(path, password)
+        entries = load_keystore(path, password) if path.exists() else {}
         alias = resolve_alias(alias)
 
         if alias in entries:
